@@ -1,136 +1,218 @@
 import streamlit as st
-import requests
+import streamlit.components.v1 as components
 
-st.set_page_config(page_title="무료 브롤스타즈 승률 & 전적", page_icon="🥊", layout="centered")
+st.set_page_config(page_title="브롤스타즈 무료 전적 조회기", page_icon="🥊", layout="centered")
 
-st.title("🥊 브롤스타즈 승률 & 최근 10경기 조회기")
-st.caption("API 키 없이 태그만 입력하면 승률 분석 및 최근 10판 전적을 보여줍니다.")
+st.title("🥊 브롤스타즈 전적 & 승률 조회기")
+st.caption("API 키 없이 태그만 입력하면 즉시 최근 전적과 승률을 계산합니다.")
 
 player_tag = st.text_input("플레이어 태그 입력 (예: #2R20PL0UR 또는 2R20PL0UR)", value="")
 
-def fetch_brawl_data(tag):
-    clean_tag = tag.strip().upper().replace("#", "")
-    
-    # 1차 시도: 공개 게이트웨이 엔드포인트
-    urls = [
-        f"https://brawlify.nates.org/v1/players/%23{clean_tag}",
-        f"https://api.brawlify.com/v1/player/{clean_tag}"
-    ]
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-    
-    for url in urls:
-        try:
-            res = requests.get(url, headers=headers, timeout=8)
-            if res.status_code == 200:
-                return res.json(), None
-        except Exception:
-            continue
-            
-    return None, "전적 정보를 가져올 수 없습니다. 태그가 정확한지 확인해 주세요."
+# 태그 자동 정제 (알파벳 O -> 숫자 0 변환, # 처리)
+clean_tag = player_tag.strip().upper().replace("O", "0")
+if clean_tag and not clean_tag.startswith("#"):
+    clean_tag = "#" + clean_tag
 
-if st.button("전적 및 승률 조회"):
+if st.button("전적 및 승률 즉시 조회") or clean_tag:
     if not player_tag:
-        st.warning("태그를 입력해 주세요.")
+        st.warning("플레이어 태그를 입력해 주세요.")
     else:
-        with st.spinner("전적 데이터 불러오는 중..."):
-            data, error = fetch_brawl_data(player_tag)
-            
-            if error:
-                st.error(error)
-                st.info("💡 **태그 입력 팁**: 숫자 `0`과 알파벳 `O`를 헷갈리지 않았는지 확인해 보세요! 브롤스타즈 태그에는 알파벳 O가 사용되지 않습니다.")
-            else:
-                # 1. 플레이어 프로필 요약
-                name = data.get("name", "Unknown")
-                trophies = data.get("trophies", 0)
-                highest = data.get("highestTrophies", data.get("highest_trophies", 0))
-                
-                st.subheader(f"👤 {name} 님의 전적 리포트")
-                c1, c2 = st.columns(2)
-                c1.metric("현재 트로피", f"{trophies:,}개")
-                c2.metric("최고 트로피", f"{highest:,}개")
-                
-                st.divider()
-                
-                # 2. 전투 기록 추출 (최근 경기 데이터)
-                battles = data.get("battles", data.get("battleLog", []))
-                
-                if not battles:
-                    st.warning("최근 진행한 경기 데이터가 존재하지 않습니다.")
-                else:
-                    normal_wins, normal_total = 0, 0
-                    ranked_wins, ranked_total = 0, 0
-                    
-                    for b in battles:
-                        battle_info = b.get("battle", {})
-                        mode = str(battle_info.get("mode", "")).lower()
-                        b_type = str(battle_info.get("type", "")).lower()
-                        result = str(battle_info.get("result", "")).lower()
-                        
-                        is_ranked = "ranked" in mode or "ranked" in b_type
-                        
-                        if result in ["victory", "defeat"]:
-                            if is_ranked:
-                                ranked_total += 1
-                                if result == "victory":
-                                    ranked_wins += 1
-                            else:
-                                normal_total += 1
-                                if result == "victory":
-                                    normal_wins += 1
+        st.info(f"🔍 조회 중인 태그: **{clean_tag}** (알파벳 'O'는 숫자 '0'으로 자동 전환되었습니다)")
+        
+        # 브라우저 전송용 URL 인코딩 (%23)
+        encoded_tag = clean_tag.replace("#", "%23")
+        
+        # 파이썬 서버 차단을 우회하기 위한 자바스크립트 기반 앱 로직
+        html_code = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <style>
+                body {{
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                    color: #31333F;
+                    background-color: transparent;
+                    margin: 0;
+                    padding: 10px;
+                }}
+                .card {{
+                    background: #f8f9fa;
+                    border: 1px solid #e9ecef;
+                    border-radius: 10px;
+                    padding: 15px;
+                    margin-bottom: 15px;
+                }}
+                .metric-container {{
+                    display: flex;
+                    gap: 15px;
+                    margin-bottom: 20px;
+                }}
+                .metric-box {{
+                    flex: 1;
+                    background: white;
+                    padding: 12px;
+                    border-radius: 8px;
+                    border: 1px solid #dee2e6;
+                    text-align: center;
+                }}
+                .metric-label {{ font-size: 13px; color: #6c757d; font-weight: 600; }}
+                .metric-value {{ font-size: 20px; font-weight: bold; margin-top: 5px; color: #111; }}
+                .metric-sub {{ font-size: 12px; color: #495057; margin-top: 3px; }}
+                .win {{ color: #28a745; font-weight: bold; }}
+                .loss {{ color: #dc3545; font-weight: bold; }}
+                .battle-item {{
+                    background: white;
+                    padding: 10px 14px;
+                    border-radius: 6px;
+                    margin-bottom: 8px;
+                    border-left: 5px solid #ccc;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    font-size: 14px;
+                }}
+                .battle-victory {{ border-left-color: #28a745; }}
+                .battle-defeat {{ border-left-color: #dc3545; }}
+                .tag-ranked {{ background: #ffd700; color: #000; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; }}
+                .tag-normal {{ background: #e9ecef; color: #495057; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; }}
+                .error-box {{ background: #f8d7da; color: #721c24; padding: 15px; border-radius: 8px; border: 1px solid #f5c6cb; }}
+            </style>
+        </head>
+        <body>
+            <div id="loading">⚡ 최신 전적 데이터를 불러오는 중...</div>
+            <div id="content" style="display:none;"></div>
 
-                    # 승률 계산
-                    normal_rate = (normal_wins / normal_total * 100) if normal_total > 0 else 0
-                    ranked_rate = (ranked_wins / ranked_total * 100) if ranked_total > 0 else 0
+            <script>
+            async function fetchData() {{
+                const rawTag = "{encoded_tag}";
+                // CORS 프록시 우회 요청
+                const targetUrl = `https://api.brawlify.com/v1/player/${{rawTag.replace('%23', '')}}`;
+                const proxyUrl = `https://corsproxy.io/?${{encodeURIComponent(targetUrl)}}`;
+
+                try {{
+                    const response = await fetch(proxyUrl);
+                    if (!response.ok) throw new Error("플레이어를 찾을 수 없거나 서버 응답에 실패했습니다.");
                     
-                    # 승률 요약 출력
-                    st.subheader("📊 일반전 vs 경쟁전 승률")
-                    res_col1, res_col2 = st.columns(2)
-                    
-                    with res_col1:
-                        st.markdown("**🎮 일반전**")
-                        if normal_total > 0:
-                            st.metric("승률", f"{normal_rate:.1f}%", f"{normal_wins}승 {normal_total - normal_wins}패 (총 {normal_total}전)")
-                        else:
-                            st.info("최근 기록에 일반전이 없습니다.")
-                            
-                    with res_col2:
-                        st.markdown("**🏆 경쟁전**")
-                        if ranked_total > 0:
-                            st.metric("승률", f"{ranked_rate:.1f}%", f"{ranked_wins}승 {ranked_total - ranked_wins}패 (총 {ranked_total}전)")
-                        else:
-                            st.info("최근 기록에 경쟁전이 없습니다.")
-                    
-                    st.divider()
-                    
-                    # 3. 최근 10판 상세 전적
-                    st.subheader("⚔️ 최근 10판 상세 전적")
-                    
-                    recent_10 = battles[:10]
-                    for idx, b in enumerate(recent_10, 1):
-                        event = b.get("event", {})
-                        battle = b.get("battle", {})
-                        
-                        mode_name = battle.get("mode", event.get("mode", "일반")).upper()
-                        map_name = event.get("map", "알 수 없는 맵")
-                        result = str(battle.get("result", "결과 없음")).lower()
-                        
-                        # 승패 표기 설정
-                        if result == "victory":
-                            res_text = "🟢 승리 (VICTORY)"
-                        elif result == "defeat":
-                            res_text = "🔴 패배 (DEFEAT)"
-                        else:
-                            res_text = "⚪ 무승부/기타"
-                            
-                        # 모드 구분 (경쟁전/일반전 표시)
-                        b_type = str(battle.get("type", "")).lower()
-                        is_ranked = "ranked" in mode_name.lower() or "ranked" in b_type
-                        mode_tag = "[경쟁전]" if is_ranked else "[일반전]"
-                        
-                        st.write(f"**{idx}. {res_text}** | {mode_tag} {mode_name} - {map_name}")
+                    const data = await response.json();
+                    renderData(data);
+                }} catch (err) {{
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('content').style.display = 'block';
+                    document.getElementById('content').innerHTML = `
+                        <div class="error-box">
+                            ❌ <b>오류 발생:</b> ${{err.message}}<br><br>
+                            - 태그 코드가 정확한지 확인해 주세요.<br>
+                            - 최근 경기를 플레이한 기록이 없을 경우 조회되지 않을 수 있습니다.
+                        </div>
+                    `;
+                }}
+            }}
+
+            function renderData(data) {{
+                document.getElementById('loading').style.display = 'none';
+                const container = document.getElementById('content');
+                container.style.display = 'block';
+
+                const battles = data.battles || data.battleLog || [];
+                
+                let normalWins = 0, normalTotal = 0;
+                let rankedWins = 0, rankedTotal = 0;
+
+                battles.forEach(b => {{
+                    const battle = b.battle || {{}};
+                    const mode = (battle.mode || "").toLowerCase();
+                    const bType = (battle.type || "").toLowerCase();
+                    const result = (battle.result || "").toLowerCase();
+
+                    const isRanked = mode.includes("ranked") || bType.includes("ranked") || bType.includes("soloranked");
+
+                    if (result === "victory" || result === "defeat") {{
+                        if (isRanked) {{
+                            rankedTotal++;
+                            if (result === "victory") rankedWins++;
+                        }} else {{
+                            normalTotal++;
+                            if (result === "victory") normalWins++;
+                        }}
+                    }}
+                }});
+
+                const normalRate = normalTotal > 0 ? ((normalWins / normalTotal) * 100).toFixed(1) : 0;
+                const rankedRate = rankedTotal > 0 ? ((rankedWins / rankedTotal) * 100).toFixed(1) : 0;
+
+                // 1. 프로필 및 승률 요약 HTML
+                let html = `
+                    <div class="card">
+                        <h3>👤 ${{data.name || '알 수 없음'}} 님의 통계</h3>
+                        <p style="margin: 3px 0; color: #666; font-size: 14px;">현재 트로피: <b>${{(data.trophies || 0).toLocaleString()}}개</b> | 최고 트로피: <b>${{(data.highestTrophies || 0).toLocaleString()}}개</b></p>
+                    </div>
+
+                    <h3>📊 최근 승률 분석</h3>
+                    <div class="metric-container">
+                        <div class="metric-box">
+                            <div class="metric-label">🎮 일반전 승률</div>
+                            <div class="metric-value">${{normalTotal > 0 ? normalRate + '%' : '기록 없음'}}</div>
+                            <div class="metric-sub">${{normalTotal > 0 ? normalWins + '승 ' + (normalTotal - normalWins) + '패' : '-'}}</div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="metric-label">🏆 경쟁전 승률</div>
+                            <div class="metric-value">${{rankedTotal > 0 ? rankedRate + '%' : '기록 없음'}}</div>
+                            <div class="metric-sub">${{rankedTotal > 0 ? rankedWins + '승 ' + (rankedTotal - rankedWins) + '패' : '-'}}</div>
+                        </div>
+                    </div>
+
+                    <h3>⚔️ 최근 10경기 상세 전적</h3>
+                `;
+
+                // 2. 최근 10경기 데이터 리스트
+                const recent10 = battles.slice(0, 10);
+                if (recent10.length === 0) {{
+                    html += `<p>최근 경기 기록이 없습니다.</p>`;
+                }} else {{
+                    recent10.forEach((b, i) => {{
+                        const battle = b.battle || {{}};
+                        const event = b.event || {{}};
+                        const mode = (battle.mode || event.mode || "일반").toUpperCase();
+                        const mapName = event.map || "기본 맵";
+                        const result = (battle.result || "기타").toLowerCase();
+                        const isRanked = mode.toLowerCase().includes("ranked") || (battle.type || "").toLowerCase().includes("ranked");
+
+                        let resClass = "";
+                        let resText = "";
+                        if (result === "victory") {{
+                            resClass = "battle-victory";
+                            resText = "<span class='win'>승리</span>";
+                        }} else if (result === "defeat") {{
+                            resClass = "battle-defeat";
+                            resText = "<span class='loss'>패배</span>";
+                        }} else {{
+                            resText = "<span>무승부/진행중</span>";
+                        }}
+
+                        const tagHtml = isRanked ? `<span class="tag-ranked">경쟁전</span>` : `<span class="tag-normal">일반전</span>`;
+
+                        html += `
+                            <div class="battle-item ${{resClass}}">
+                                <div>
+                                    <b>${{i + 1}}. ${{resText}}</b> &nbsp; ${{tagHtml}} <b>${{mode}}</b> - ${{mapName}}
+                                </div>
+                            </div>
+                        `;
+                    }});
+                }}
+
+                container.innerHTML = html;
+            }}
+
+            fetchData();
+            </script>
+        </body>
+        </html>
+        """
+        
+        # HTML 렌더링
+        components.html(html_code, height=650, scrolling=True)
     
                 
                 

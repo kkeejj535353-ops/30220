@@ -1,49 +1,77 @@
 import streamlit as st
 import requests
 import pandas as pd
+import json
 
 # 페이지 기본 설정
 st.set_page_config(page_title="통합 경로 & 날씨 가이드", page_icon="🚗", layout="wide")
 
 # -------------------------------------------------------------------
-# 1. 고성능 한국 장소/지하철역/주소 통합 검색 API
+# 1. 한국 주소/지하철역/건물명 검색 엔진 (API 키 없이 다중 검색)
 # -------------------------------------------------------------------
 
 def get_coordinates(query_str):
     """
-    지하철역, 건물명, 아파트 이름, 일반 주소까지 모두 찾아내는 다중 검색 함수
-    1차: 카카오 공개 장소 API (가장 정확)
-    2차: 브이월드(국토부) 주소/장소 API
-    3차: OpenStreetMap 보완 검색
+    주소, 도로명주소, 지하철역, 건물명 검색 성공률 100%를 목표로 하는 검색 함수
     """
     q = query_str.strip()
-    
-    # 1. 카카오 지도 Open Search Engine 시도 (지하철역/건물명 최적화)
+    if not q:
+        return None, None, None
+
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) StreamlitApp/1.0"}
+
+    # 1차: VWorld(국토교통부) 오픈 API 이용 (한국 주소/도로명/건물 최적화)
     try:
-        kakao_url = "https://dapi.kakao.com/v2/local/search/keyword.json"
-        headers = {"Authorization": "KakaoAK 767a4ed73595ef3a1b3be0fb444a10df"} # 공개 테스트 키
-        res = requests.get(kakao_url, headers=headers, params={"query": q}, timeout=3)
+        vworld_url = "https://api.vworld.kr/req/search"
+        params = {
+            "service": "search",
+            "request": "search",
+            "version": "2.0",
+            "crs": "EPSG:4326",
+            "size": "1",
+            "page": "1",
+            "query": q,
+            "type": "PLACE", # 장소 검색
+            "format": "json",
+            "key": "CEB52025-0E6F-3235-9C08-118E3F868E21" # VWorld 공공 오픈키
+        }
+        res = requests.get(vworld_url, params=params, headers=headers, timeout=3)
         if res.status_code == 200:
-            docs = res.json().get("documents", [])
-            if docs:
-                item = docs[0]
-                return float(item["y"]), float(item["x"]), item["place_name"]
+            data = res.json()
+            items = data.get("response", {}).get("result", {}).get("items", [])
+            if items:
+                item = items[0]
+                lon = float(item["point"]["x"])
+                lat = float(item["point"]["y"])
+                name = item.get("title", q)
+                return lat, lon, name
     except Exception:
         pass
 
-    # 2. 지하철역/건물명 키워드 보완 조합 시도
-    search_terms = []
+    # 2차: 검색어 변환 알고리즘 (OpenStreetMap 보완)
+    search_queries = []
+    
+    # '금천구', '은평구' 등 구/동 단위 처리
+    if q.endswith("구") or q.endswith("동") or q.endswith("시"):
+        search_queries.append(f"서울특별시 {q}")
+        search_queries.append(f"대한민국 {q}")
+    
+    # '강남역', '홍대입구' 등 역 처리
     if not q.endswith("역") and ("역" in q or len(q) <= 4):
-        search_terms.append(f"{q}역")
-    search_terms.extend([f"{q} 대한민국", f"서울 {q}", q])
+        search_queries.append(f"{q}역")
+        search_queries.append(f"{q}역 대한민국")
+    else:
+        search_queries.append(f"{q} 대한민국")
+        search_queries.append(f"대한민국 {q}")
 
-    # 3. OpenStreetMap 다중 검색 시도
-    headers = {"User-Agent": "StreamlitMapApp/6.0 (contact@example.com)"}
-    for term in search_terms:
+    search_queries.append(q)
+
+    # OpenStreetMap 순차 시도
+    for query in search_queries:
         try:
             osm_url = "https://nominatim.openstreetmap.org/search"
             params = {
-                "q": term,
+                "q": query,
                 "format": "json",
                 "limit": 1,
                 "accept-language": "ko"
@@ -51,7 +79,10 @@ def get_coordinates(query_str):
             res = requests.get(osm_url, params=params, headers=headers, timeout=3)
             if res.status_code == 200 and len(res.json()) > 0:
                 data = res.json()[0]
-                return float(data["lat"]), float(data["lon"]), data.get("display_name", term)
+                lat = float(data["lat"])
+                lon = float(data["lon"])
+                name = data.get("display_name", query)
+                return lat, lon, name
         except Exception:
             continue
 
@@ -139,7 +170,7 @@ def render_weather_alerts(weather):
 
     st.subheader("📢 실시간 맞춤 안내 메시지")
     
-    # 1. 미세먼지(황사) 추천
+    # 1. 미세먼지(황사) 알림
     if is_dust:
         st.error(f"😷 **미세먼지(황사)가 높습니다! (PM10: {pm10:.1f} µg/m³)**\n\n미세먼지(황사)가 있으니 **마스크를 착용해주시는것을 추천드립니다**")
     else:
@@ -155,7 +186,7 @@ def render_weather_alerts(weather):
     if temp >= 30:
         st.warning(f"🔥 **무더위 주의! (현재 기온: {temp}°C)**\n\n기온이 30도가 넘으니 **물을 자주 마셔주세요!**")
 
-    # 배경 화면 설정
+    # 배경 화면 연출
     if is_rain:
         bg_color = "linear-gradient(135deg, #3a6073, #16222a)"
         icon = "🌧️ 비 내리는 날씨"
@@ -197,27 +228,27 @@ def render_weather_alerts(weather):
 # -------------------------------------------------------------------
 
 st.title("🚗 출발지 & 목적지 통합 교통·날씨 가이드")
-st.caption("지하철역, 건물명, 도로명 주소 등 무엇이든 입력하세요.")
+st.caption("주소, 도로명주소, 지하철역, 건물명을 입력하세요.")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    start_address = st.text_input("🚩 출발지 (예: 강남역, 코엑스, 금천구)", value="강남역")
+    start_address = st.text_input("🚩 출발지 입력", value="서울시 금천구 가산동")
 with col2:
-    end_address = st.text_input("🏁 목적지 (예: 홍대입구역, 63빌딩, 은평구)", value="홍대입구역")
+    end_address = st.text_input("🏁 목적지 입력", value="서울특별시 은평구 불광동")
 
 if st.button("🚀 바로 조회하기", use_container_width=True):
     if not start_address or not end_address:
         st.warning("출발지와 목적지를 모두 입력해 주세요.")
     else:
-        with st.spinner("위치 탐색 및 교통/날씨 정보 수집 중..."):
+        with st.spinner("위치 확인 및 경로 계산 중..."):
             s_lat, s_lon, s_full = get_coordinates(start_address)
             e_lat, e_lon, e_full = get_coordinates(end_address)
 
             if not s_lat:
-                st.error(f"출발지 '{start_address}' 위치를 찾지 못했습니다.")
+                st.error(f"❌ 출발지 '{start_address}'의 위치를 찾지 못했습니다. '금천구', '가산동', '가산디지털단지역'처럼 단어를 단순화해서 입력해 보세요.")
             elif not e_lat:
-                st.error(f"목적지 '{end_address}' 위치를 찾지 못했습니다.")
+                st.error(f"❌ 목적지 '{end_address}'의 위치를 찾지 못했습니다. '은평구', '불광동', '연신내역'처럼 단어를 단순화해서 입력해 보세요.")
             else:
                 # 1. 경로 계산
                 dist_km, dur_min, err = get_route_info(s_lat, s_lon, e_lat, e_lon)
@@ -241,18 +272,16 @@ if st.button("🚀 바로 조회하기", use_container_width=True):
                 m3.metric("🌡️ 기온", f"{weather['temp']} °C")
                 m4.metric("😷 미세먼지", f"{weather['pm10']:.1f} µg/m³")
 
-                st.write(f"**출발지 검색 결과**: {s_full}")
-                st.write(f"**목적지 검색 결과**: {e_full}")
+                st.write(f"**출발지**: {start_address} (`{s_full}`)")
+                st.write(f"**목적지**: {end_address} (`{e_full}`)")
 
                 st.divider()
 
                 # 5. 지도 표시
-                st.subheader("📍 출발지 ➔ 목적지 위치 지도")
+                st.subheader("📍 위치 및 경로 지도")
                 map_df = pd.DataFrame({
                     "lat": [s_lat, e_lat],
                     "lon": [s_lon, e_lon]
                 })
                 st.map(map_df, zoom=10)
 
-                
-    
